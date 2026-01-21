@@ -6,6 +6,9 @@
 # The client only handles tokens and scan execution.
 # ==========================================
 
+import sys
+import os
+import ctypes
 
 def main():
     """
@@ -58,7 +61,12 @@ def display_welcome():
     Display a simple, friendly welcome message.
     Should not include any technical details.
     """
-    pass
+    print("=" * 45)
+    print(" Security Scan Tool")
+    print("=" * 45)
+    print("This tool will guide you through a security scan.")
+    print("No technical knowledge is required.")
+    print()
 
 
 def display_preparing_system():
@@ -66,8 +74,10 @@ def display_preparing_system():
     Inform the user that system preparation is in progress.
     This message hides technical dependency checks.
     """
-    pass
-
+    print("Preparing your system for the security scan...")
+    print("This may take a few moments.")
+    print()
+    
 
 def display_admin_required():
     """
@@ -115,7 +125,10 @@ def is_admin():
     Check whether the script is running with administrator privileges.
     Returns True if admin, False otherwise.
     """
-    pass
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() == 1
+    except Exception:
+        return False
 
 
 def request_admin_privileges():
@@ -123,7 +136,21 @@ def request_admin_privileges():
     Relaunch the script with administrator privileges using UAC prompt.
     No logic should continue after this function call.
     """
-    pass
+    try:
+        params = " ".join([f'"{arg}"' for arg in sys.argv])
+        ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            sys.executable,
+            params,
+            None,
+            1
+        )
+    except Exception:
+        pass
+
+    # Exit current (non-admin) process
+    sys.exit(0)
 
 
 # ==========================================
