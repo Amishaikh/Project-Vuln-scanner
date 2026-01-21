@@ -9,26 +9,21 @@
 import sys
 import os
 import ctypes
+import platform
+import subprocess
+import socket
+import urllib.request
+import tempfile
+import shutil
 
 def main():
-    """
-    Main controller function.
-    - Displays welcome message
-    - Ensures administrator privileges
-    - Performs system checks and setup
-    - Handles authentication
-    - Executes vulnerability scan
-    - Uploads results to server
-    - Cleans up and exits
-    """
-    display_welcome()
-
+    # 1) Ensure we're running inside an elevated console first
     if not is_admin():
         request_admin_privileges()
-        if not is_admin():
-            display_admin_required()
-            exit_program()
+        return  # stop the non-admin instance immediately
 
+    # 2) Now we're admin (in the admin PowerShell window) — show UX
+    display_welcome()
     display_preparing_system()
 
     if not system_preflight_check():
@@ -84,7 +79,9 @@ def display_admin_required():
     Display message indicating administrator permission is required.
     Used when user denies UAC elevation.
     """
-    pass
+    print("Administrator permission is required to run this scan.")
+    print("Please run again and click 'Yes' on the permission prompt.")
+    print()
 
 
 def display_setup_failed():
@@ -92,7 +89,9 @@ def display_setup_failed():
     Display a generic failure message if system setup cannot be completed.
     Should not expose technical error details.
     """
-    pass
+    print("System setup could not be completed.")
+    print("Please contact your administrator.")
+    print()
 
 
 def display_scan_failed():
@@ -137,24 +136,37 @@ def request_admin_privileges():
     No logic should continue after this function call.
     """
     try:
-        params = " ".join([f'"{arg}"' for arg in sys.argv])
-        ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            sys.executable,
-            params,
-            None,
-            1
+        script_path = os.path.abspath(sys.argv[0])
+        python_exe = os.path.abspath(sys.executable)
+        cwd = os.getcwd()
+
+        pwsh = shutil.which("pwsh") or shutil.which("powershell")
+        if not pwsh:
+            sys.exit(1)
+
+        # Run the script in the elevated shell (keep window open)
+        ps_inner = f"& '{python_exe}' '{script_path}'"
+
+        ps_command = (
+            f"Start-Process -Verb RunAs -FilePath '{pwsh}' "
+            f"-WorkingDirectory '{cwd}' "
+            f"-ArgumentList @('-NoExit','-NoProfile','-Command',\"{ps_inner}\")"
+        )
+
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_command],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
     except Exception:
         pass
 
-    # Exit current (non-admin) process
+    # Exit current non-admin instance
     sys.exit(0)
 
 
 # ==========================================
-# SYSTEM CHECKS & AUTO-INSTALLATION
+# SYSTEM CHECKS & AUTO-  INSTALLATION
 # ==========================================
 
 def system_preflight_check():
@@ -167,50 +179,134 @@ def system_preflight_check():
     - Nmap presence
     Returns True if system is ready, False otherwise.
     """
-    pass
+    # Check OS
+    if not check_windows_os():
+        return False
+
+    # Check PowerShell
+    if not check_powershell():
+        return False
+
+    # Check Internet
+    if not check_internet():
+        print("Internet connection is required to continue.")
+        return False
+
+    # Python check + auto-install
+    if not check_python():
+        if not install_python():
+            print("Failed to set up Python.")
+            return False
+
+    # Nmap check + auto-install
+    if not check_nmap():
+        if not install_nmap():
+            print("Failed to set up scanning tools.")
+            return False
+
+    return True
 
 
 def check_windows_os():
     """
     Verify that the operating system is Windows.
     """
-    pass
+    try:
+        return platform.system().lower() == "windows"
+    except Exception:
+        return False
 
 
 def check_powershell():
     """
     Verify PowerShell is available and executable.
     """
-    pass
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command", "Get-Host"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def check_internet():
     """
     Check internet connectivity by reaching the web server.
     """
-    pass
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=5)
+        print("Internet check: OK")
+        return True
+    except Exception:
+        #print("Internet connection is required to continue.")
+        return False
 
 
 def check_python():
     """
     Check if Python is installed and accessible.
     """
-    pass
-
+    try:
+        result = subprocess.run(
+            ["python", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return result.returncode == 0
+    except Exception:
+        return False    
 
 def install_python():
     """
     Download and silently install Python if missing.
     Verify installation after completion.
     """
-    pass
+    try:
+        print("Setting up required components...")
+
+        python_url = "https://www.python.org/ftp/python/3.12.1/python-3.12.1-amd64.exe"
+        installer_path = os.path.join(tempfile.gettempdir(), "python_installer.exe")
+
+        urllib.request.urlretrieve(python_url, installer_path)
+
+        subprocess.run(
+            [
+                installer_path,
+                "/quiet",
+                "InstallAllUsers=1",
+                "PrependPath=1"
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        return check_python()
+
+    except Exception:
+        return False
 
 
 def check_nmap():
     """
     Check if Nmap is installed and accessible.
     """
-    pass
+    try:
+        result = subprocess.run(
+            ["nmap", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if result.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # Fallback: check default install path
+    default_nmap_path = r"C:\Program Files (x86)\Nmap\nmap.exe"
+    return os.path.exists(default_nmap_path)
 
 
 def install_nmap():
@@ -218,7 +314,24 @@ def install_nmap():
     Download and silently install Nmap if missing.
     Verify installation after completion.
     """
-    pass
+    try:
+        print("Setting up scanner...")
+
+        nmap_url = "https://nmap.org/dist/nmap-7.94-setup.exe"
+        installer_path = os.path.join(tempfile.gettempdir(), "nmap_installer.exe")
+
+        urllib.request.urlretrieve(nmap_url, installer_path)
+
+        subprocess.run(
+            [installer_path, "/S"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        return check_nmap()
+
+    except Exception:
+        return False
 
 
 # ==========================================
@@ -356,8 +469,9 @@ def cleanup():
 def exit_program():
     """
     Safely terminate the program.
+    In an elevated PowerShell with -NoExit, the window will stay open anyway.
     """
-    pass
+    sys.exit(0)
 
 
 # ==========================================
