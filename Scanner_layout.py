@@ -6,6 +6,14 @@
 # The client only handles tokens and scan execution.
 # ==========================================
 
+import sys
+import os
+import ctypes
+import platform
+import subprocess
+import socket
+import urllib.request
+import tempfile
 
 def main():
     """
@@ -58,7 +66,12 @@ def display_welcome():
     Display a simple, friendly welcome message.
     Should not include any technical details.
     """
-    pass
+    print("=" * 45)
+    print(" Security Scan Tool")
+    print("=" * 45)
+    print("This tool will guide you through a security scan.")
+    print("No technical knowledge is required.")
+    print()
 
 
 def display_preparing_system():
@@ -66,8 +79,10 @@ def display_preparing_system():
     Inform the user that system preparation is in progress.
     This message hides technical dependency checks.
     """
-    pass
-
+    print("Preparing your system for the security scan...")
+    print("This may take a few moments.")
+    print()
+    
 
 def display_admin_required():
     """
@@ -115,7 +130,10 @@ def is_admin():
     Check whether the script is running with administrator privileges.
     Returns True if admin, False otherwise.
     """
-    pass
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() == 1
+    except Exception:
+        return False
 
 
 def request_admin_privileges():
@@ -123,11 +141,25 @@ def request_admin_privileges():
     Relaunch the script with administrator privileges using UAC prompt.
     No logic should continue after this function call.
     """
-    pass
+    try:
+        params = " ".join([f'"{arg}"' for arg in sys.argv])
+        ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            sys.executable,
+            params,
+            None,
+            1
+        )
+    except Exception:
+        pass
+
+    # Exit current (non-admin) process
+    sys.exit(0)
 
 
 # ==========================================
-# SYSTEM CHECKS & AUTO-INSTALLATION
+# SYSTEM CHECKS & AUTO-  INSTALLATION
 # ==========================================
 
 def system_preflight_check():
@@ -140,50 +172,134 @@ def system_preflight_check():
     - Nmap presence
     Returns True if system is ready, False otherwise.
     """
-    pass
+    # Check OS
+    if not check_windows_os():
+        return False
+
+    # Check PowerShell
+    if not check_powershell():
+        return False
+
+    # Check Internet
+    if not check_internet():
+        print("Internet connection is required to continue.")
+        return False
+
+    # Python check + auto-install
+    if not check_python():
+        if not install_python():
+            print("Failed to set up Python.")
+            return False
+
+    # Nmap check + auto-install
+    if not check_nmap():
+        if not install_nmap():
+            print("Failed to set up scanning tools.")
+            return False
+
+    return True
 
 
 def check_windows_os():
     """
     Verify that the operating system is Windows.
     """
-    pass
+    try:
+        return platform.system().lower() == "windows"
+    except Exception:
+        return False
 
 
 def check_powershell():
     """
     Verify PowerShell is available and executable.
     """
-    pass
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command", "Get-Host"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def check_internet():
     """
     Check internet connectivity by reaching the web server.
     """
-    pass
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=5)
+        print("Internet check: OK")
+        return True
+    except Exception:
+        print("Internet connection is required to continue.")
+        return False
 
 
 def check_python():
     """
     Check if Python is installed and accessible.
     """
-    pass
-
+    try:
+        result = subprocess.run(
+            ["python", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return result.returncode == 0
+    except Exception:
+        return False    
 
 def install_python():
     """
     Download and silently install Python if missing.
     Verify installation after completion.
     """
-    pass
+    try:
+        print("Setting up required components...")
+
+        python_url = "https://www.python.org/ftp/python/3.12.1/python-3.12.1-amd64.exe"
+        installer_path = os.path.join(tempfile.gettempdir(), "python_installer.exe")
+
+        urllib.request.urlretrieve(python_url, installer_path)
+
+        subprocess.run(
+            [
+                installer_path,
+                "/quiet",
+                "InstallAllUsers=1",
+                "PrependPath=1"
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        return check_python()
+
+    except Exception:
+        return False
 
 
 def check_nmap():
     """
     Check if Nmap is installed and accessible.
     """
-    pass
+    try:
+        result = subprocess.run(
+            ["nmap", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if result.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # Fallback: check default install path
+    default_nmap_path = r"C:\Program Files (x86)\Nmap\nmap.exe"
+    return os.path.exists(default_nmap_path)
 
 
 def install_nmap():
@@ -191,7 +307,24 @@ def install_nmap():
     Download and silently install Nmap if missing.
     Verify installation after completion.
     """
-    pass
+    try:
+        print("Setting up scanner...")
+
+        nmap_url = "https://nmap.org/dist/nmap-7.94-setup.exe"
+        installer_path = os.path.join(tempfile.gettempdir(), "nmap_installer.exe")
+
+        urllib.request.urlretrieve(nmap_url, installer_path)
+
+        subprocess.run(
+            [installer_path, "/S"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+        return check_nmap()
+
+    except Exception:
+        return False
 
 
 # ==========================================
