@@ -32,16 +32,15 @@ def main():
         display_setup_failed()
         exit_program()
 
-    if not authentication_menu():
-        exit_program()
 
     scan_results = run_vulnerability_scan()
     if scan_results is None:
         display_scan_failed()
         exit_program()
 
-    if not upload_results(scan_results):
-        display_upload_failed()
+    # Step 5: Generate report
+    if not generate_report(scan_results):
+        print("[!] Failed to generate report.")
         exit_program()
 
     display_scan_complete()
@@ -377,64 +376,7 @@ def install_nmap():
     except Exception as e:
         print(f"[!] Auto-install failed: {e}")
         return False
-
-
-
-# ==========================================
-# AUTHENTICATION & TOKEN MANAGEMENT
-# ==========================================
-
-def authentication_menu():
-    """
-    Display authentication menu:
-    - Login (existing user)
-    - Register (new user)
-    - Exit
-    Returns True on successful authentication, False otherwise.
-    """
-    pass
-
-
-def register_user():
-    """
-    Collect registration details from user.
-    Send data securely to server.
-    Receive client ID and authentication token.
-    """
-    pass
-
-
-def login_user():
-    """
-    Prompt user for client ID and password.
-    Send credentials to server for validation.
-    Receive authentication token if successful.
-    """
-    pass
-
-
-def save_auth_token(token):
-    """
-    Save authentication token locally in encrypted or protected format.
-    Token is short-lived and not a password.
-    """
-    pass
-
-
-def load_auth_token():
-    """
-    Load stored authentication token if available.
-    Used to avoid repeated logins.
-    """
-    pass
-
-
-def invalidate_token():
-    """
-    Remove stored authentication token when expired or invalid.
-    """
-    pass
-
+    
 
 # ==========================================
 # VULNERABILITY SCANNING
@@ -442,61 +384,67 @@ def invalidate_token():
 
 def run_vulnerability_scan():
     """
-    Main scanning controller.
-    - Collect system information
-    - Run port scans
-    - Execute vulnerability scripts
-    - Process results into structured format
-    Returns scan data or None on failure.
+    Orchestrates the entire scan:
+    - Windows security checks
+    - Network scanning
+    - Data aggregation
     """
     pass
 
+
+# -------- WINDOWS SECURITY CHECKS --------
 
 def collect_os_information():
+    """Collect OS version, hostname, build"""
+    pass
+
+def collect_windows_security():
     """
-    Use PowerShell to collect OS version, hostname, and system info.
+    Collect:
+    - Firewall status
+    - Defender status
+    - SMBv1
+    - RDP
+    - Users
+    - Password policy
+    - Installed patches
     """
     pass
 
+
+# -------- NETWORK SCANNING --------
 
 def run_port_scan():
-    """
-    Run Nmap port scan against the local system.
-    """
+    """Run Nmap port scan on local system"""
     pass
-
 
 def run_vulnerability_scripts():
-    """
-    Execute basic Nmap vulnerability detection scripts.
-    """
+    """Run Nmap vulnerability scripts"""
     pass
 
+
+# -------- DATA PROCESSING --------
 
 def process_scan_results():
     """
-    Normalize scan output and assign risk levels.
-    Convert data into JSON-ready format.
+    Normalize Windows + Nmap data
+    Assign severity (High / Medium / Low)
     """
     pass
 
 
 # ==========================================
-# SERVER COMMUNICATION
+# REPORTING
 # ==========================================
 
-def upload_results(scan_data):
+def generate_report(scan_data):
     """
-    Upload scan results to the web server using HTTPS.
-    Uses authentication token for authorization.
-    Returns True on success, False otherwise.
-    """
-    pass
-
-
-def send_https_request():
-    """
-    Generic helper for sending authenticated HTTPS requests to server.
+    Generate:
+    - Executive summary
+    - Technical findings
+    - Risk levels
+    - Recommendations
+    Output: HTML / TXT file
     """
     pass
 
