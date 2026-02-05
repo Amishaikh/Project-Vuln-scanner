@@ -409,6 +409,7 @@ def collect_windows_security():
     - Password policy
     - Installed patches
     """
+    
     pass
 
 
