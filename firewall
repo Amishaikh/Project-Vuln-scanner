@@ -1,0 +1,418 @@
+import json
+import socket
+import subprocess
+from datetime import datetime
+
+# -----------------------------
+# Helper: run PowerShell safely
+# -----------------------------
+def _run_ps(command: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        capture_output=True,
+        text=True
+    )
+
+def _run_ps_json(command: str):
+    """
+    PowerShell command MUST end with ConvertTo-Json.
+    Returns Python object (dict/list) or None.
+    """
+    cp = _run_ps(command)
+    if cp.returncode != 0:
+        return None
+    out = (cp.stdout or "").strip()
+    if not out:
+        return None
+    try:
+        return json.loads(out)
+    except Exception:
+        return None
+
+def _normalize_to_list(obj):
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    return [obj]
+
+def _bump(summary: dict, severity: str):
+    if severity not in summary:
+        summary[severity] = 0
+    summary[severity] += 1
+
+
+# -----------------------------
+# OS INFORMATION
+# -----------------------------
+def collect_os_information():
+    """
+    Collect OS version, hostname, build (Windows 10/11 friendly).
+    Uses PowerShell to pull reliable values.
+    """
+    ps = r"""
+    $os = Get-CimInstance Win32_OperatingSystem
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $net = Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object {$_.IPEnabled -eq $true} | Select-Object -First 1
+    [PSCustomObject]@{
+      Hostname       = $env:COMPUTERNAME
+      Username       = $env:USERNAME
+      OSName         = $os.Caption
+      OSVersion      = $os.Version
+      BuildNumber    = $os.BuildNumber
+      Architecture   = $os.OSArchitecture
+      Manufacturer   = $cs.Manufacturer
+      Model          = $cs.Model
+      Domain         = $cs.Domain
+      IPv4           = ($net.IPAddress | Where-Object {$_ -match '^\d{1,3}(\.\d{1,3}){3}$'} | Select-Object -First 1)
+      TimestampUTC   = (Get-Date).ToUniversalTime().ToString('o')
+    } | ConvertTo-Json -Depth 3
+    """
+    data = _run_ps_json(ps)
+    if data is None:
+        # minimal fallback if PS fails
+        return {
+            "Hostname": socket.gethostname(),
+            "TimestampUTC": datetime.utcnow().isoformat() + "Z",
+            "Error": "Failed to collect OS information via PowerShell."
+        }
+    return data
+
+
+# -----------------------------
+# FIREWALL MODULE
+# -----------------------------
+def _is_any_remote(remote):
+    """
+    RemoteAddress can be:
+    - string
+    - list of strings
+    - null
+    Treat null/empty as potentially broad.
+    """
+    if remote is None:
+        return True
+    if isinstance(remote, str):
+        values = [remote]
+    else:
+        values = remote
+
+    joined = ",".join([str(v) for v in values]).lower()
+    return ("any" in joined) or ("0.0.0.0/0" in joined) or ("::/0" in joined)
+
+def scan_windows_firewall():
+    """
+    Firewall vulnerability/misconfiguration scan:
+    - Profile status (Domain/Private/Public)
+    - Default inbound actions
+    - Logging config (blocked)
+    - Risky inbound allow rules (Any remote / Public profile / high value ports)
+    """
+    results = {
+        "module": "firewall",
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "profiles": [],
+        "findings": [],
+        "severity_summary": {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0},
+    }
+
+    # 1) Profiles
+    ps_profiles = r"""
+    Get-NetFirewallProfile |
+      Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction, LogBlocked, LogAllowed, LogFileName, LogMaxSizeKilobytes |
+      ConvertTo-Json -Depth 3
+    """
+    profiles = _normalize_to_list(_run_ps_json(ps_profiles))
+    if not profiles:
+        results["findings"].append({
+            "severity": "Medium",
+            "title": "Firewall profile check failed",
+            "evidence": "Could not read firewall profiles (Get-NetFirewallProfile).",
+            "recommendation": "Run as Administrator and ensure Windows Defender Firewall service is available."
+        })
+        _bump(results["severity_summary"], "Medium")
+        return results
+
+    results["profiles"] = profiles
+
+    for p in profiles:
+        name = str(p.get("Name", "Unknown"))
+        enabled = p.get("Enabled")
+        inbound_default = str(p.get("DefaultInboundAction", "")).lower()
+        log_blocked = p.get("LogBlocked")
+
+        # Disabled profile
+        if enabled is False:
+            sev = "High"
+            if name.lower() == "public":
+                sev = "Critical"
+            results["findings"].append({
+                "severity": sev,
+                "title": f"Firewall disabled on {name} profile",
+                "evidence": f"{name}: Enabled = False",
+                "recommendation": "Enable firewall on all profiles (especially Public) and review inbound allow rules."
+            })
+            _bump(results["severity_summary"], sev)
+
+        # Default inbound allow
+        if inbound_default == "allow":
+            results["findings"].append({
+                "severity": "High",
+                "title": f"Default inbound policy is ALLOW on {name} profile",
+                "evidence": f"{name}: DefaultInboundAction = Allow",
+                "recommendation": "Set DefaultInboundAction to Block and only allow necessary inbound services."
+            })
+            _bump(results["severity_summary"], "High")
+
+        # Logging disabled
+        if log_blocked is False:
+            results["findings"].append({
+                "severity": "Medium",
+                "title": f"Blocked-traffic logging disabled on {name} profile",
+                "evidence": f"{name}: LogBlocked = False",
+                "recommendation": "Enable blocked traffic logging for better visibility and incident response."
+            })
+            _bump(results["severity_summary"], "Medium")
+
+    # 2) Inbound allow rules + ports + remote scope
+    ps_rules = r"""
+    $rules = Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow
+    $out = foreach ($r in $rules) {
+      $pf = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $r -ErrorAction SilentlyContinue
+      $af = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $r -ErrorAction SilentlyContinue
+      [PSCustomObject]@{
+        DisplayName   = $r.DisplayName
+        Profile       = $r.Profile
+        Program       = $r.Program
+        Service       = $r.Service
+        Protocol      = $pf.Protocol
+        LocalPort     = $pf.LocalPort
+        RemoteAddress = $af.RemoteAddress
+      }
+    }
+    $out | ConvertTo-Json -Depth 6
+    """
+    rules = _normalize_to_list(_run_ps_json(ps_rules))
+
+    # Not fatal if rules can't be enumerated
+    if not rules:
+        results["findings"].append({
+            "severity": "Low",
+            "title": "Could not enumerate inbound allow rules",
+            "evidence": "Firewall rules could not be listed (Get-NetFirewallRule).",
+            "recommendation": "Run as Administrator or verify NetSecurity module availability."
+        })
+        _bump(results["severity_summary"], "Low")
+        return results
+
+    high_value_ports = {
+        "3389": "RDP",
+        "445": "SMB",
+        "139": "SMB",
+        "5985": "WinRM",
+        "5986": "WinRM",
+    }
+
+    for r in rules:
+        name = r.get("DisplayName", "Unknown rule")
+        profile = str(r.get("Profile", "")).lower()
+        program = r.get("Program")
+        local_port = r.get("LocalPort")
+        remote = r.get("RemoteAddress")
+
+        port_str = "" if local_port is None else str(local_port)
+        any_remote = _is_any_remote(remote)
+
+        # Critical: Any program + Any port
+        if (program in [None, "", "Any"]) and (port_str in ["", "Any", "0"]):
+            sev = "Critical"
+            results["findings"].append({
+                "severity": sev,
+                "title": "Inbound allow rule permits Any program on Any port",
+                "evidence": f"Rule='{name}', Profile={r.get('Profile')}, Program={program}, LocalPort={local_port}, RemoteAddress={remote}",
+                "recommendation": "Restrict the rule to a specific program, required ports, and trusted remote addresses."
+            })
+            _bump(results["severity_summary"], sev)
+            continue
+
+        # Critical/High: high value ports exposed to Any remote
+        if port_str in high_value_ports and any_remote:
+            sev = "High"
+            if ("public" in profile) or ("any" in profile):
+                sev = "Critical"
+            results["findings"].append({
+                "severity": sev,
+                "title": f"{high_value_ports[port_str]} (port {port_str}) allowed inbound from Any remote host",
+                "evidence": f"Rule='{name}', Profile={r.get('Profile')}, LocalPort={local_port}, RemoteAddress={remote}",
+                "recommendation": "Disable if not needed, or restrict to VPN/specific IPs and avoid allowing on Public profile."
+            })
+            _bump(results["severity_summary"], sev)
+
+        # High: Any remote + Public profile (general exposure)
+        if any_remote and (("public" in profile) or ("any" in profile)):
+            results["findings"].append({
+                "severity": "High",
+                "title": "Inbound allow rule exposed to Any remote address on Public profile",
+                "evidence": f"Rule='{name}', Profile={r.get('Profile')}, LocalPort={local_port}, RemoteAddress={remote}",
+                "recommendation": "Limit remote addresses and disable inbound allow rules on Public profile unless essential."
+            })
+            _bump(results["severity_summary"], "High")
+
+    if not results["findings"]:
+        results["findings"].append({
+            "severity": "Info",
+            "title": "No obvious firewall misconfigurations detected",
+            "evidence": "Firewall profiles and inbound rules did not match common risky patterns.",
+            "recommendation": "Continue reviewing rule necessity and keep Windows updated."
+        })
+        _bump(results["severity_summary"], "Info")
+
+    return results
+
+
+# -----------------------------
+# USER-FRIENDLY PRINT FUNCTION
+# -----------------------------
+def print_firewall_results_user_friendly(firewall_data):
+    """
+    Print firewall scan results in a user-friendly way (non-technical first),
+    plus technical details for IT/admin support.
+    """
+
+    print("\n" + "="*70)
+    print("FIREWALL SECURITY CHECK (USER-FRIENDLY RESULTS)")
+    print("="*70)
+
+    profiles = firewall_data.get("profiles", [])
+    findings = firewall_data.get("findings", [])
+    summary = firewall_data.get("severity_summary", {})
+
+    # 1) Non-technical summary
+    print("\n✅ What this means:")
+    print("This check looks for firewall settings that could allow unwanted network access.")
+    print("If risky settings are found, your device may be easier to access from outside.\n")
+
+    # show profile status simply
+    if profiles:
+        print("🔎 Firewall Status (simple view):")
+        for p in profiles:
+            name = p.get("Name", "Unknown")
+            enabled = p.get("Enabled")
+            enabled_text = "ON" if enabled else "OFF"
+            print(f" - {name} network: Firewall is {enabled_text}")
+    else:
+        print("⚠️ Could not read firewall status.\n")
+
+    # 2) Non-technical findings
+    if not findings:
+        print("\n✅ Good news: No major firewall problems were detected.")
+        print("If you still feel something is wrong, contact your IT support for a deeper check.")
+        print("="*70 + "\n")
+        return
+
+    print("\n⚠️ Issues Found (explained simply):")
+
+    for i, f in enumerate(findings, 1):
+        severity = f.get("severity", "Info")
+        title = f.get("title", "Issue detected")
+
+        # Make severity readable
+        if severity in ["Critical", "High"]:
+            sev_label = "HIGH RISK"
+        elif severity == "Medium":
+            sev_label = "MEDIUM RISK"
+        else:
+            sev_label = "LOW RISK / INFO"
+
+        print(f"\n{i}. {title}")
+        print(f"   Risk Level: {sev_label}")
+
+        # User-friendly advice
+        if severity in ["Critical", "High"]:
+            print("   What you should do: Contact your IT/admin to fix this setting.")
+        elif severity == "Medium":
+            print("   What you should do: Recommended to ask IT/admin to review this.")
+        else:
+            print("   What you should do: No urgent action needed.")
+
+    # 3) Suggested next steps
+    print("\n✅ Next Steps:")
+    print("1) If you are not sure how to fix firewall settings, do NOT change anything yourself.")
+    print("2) Take a screenshot of this result or share the report with your IT person.")
+    print("3) If any issue says HIGH RISK, contact IT as soon as possible.")
+
+    # 4) Severity summary
+    print("\n📌 Risk Summary:")
+    for level in ["Critical", "High", "Medium", "Low", "Info"]:
+        if level in summary:
+            print(f" - {level}: {summary.get(level, 0)}")
+
+    # 5) Technical details section
+    print("\n" + "-"*70)
+    print("TECHNICAL DETAILS (FOR IT / ADMIN)")
+    print("-"*70)
+
+    for i, f in enumerate(findings, 1):
+        print(f"\n[{i}] {f.get('title')}")
+        print(f"Severity: {f.get('severity')}")
+        print(f"Evidence: {f.get('evidence')}")
+        print(f"Recommendation: {f.get('recommendation')}")
+
+    print("\n" + "="*70 + "\n")
+
+
+# -----------------------------
+# WINDOWS SECURITY (AGGREGATOR)
+# -----------------------------
+def collect_windows_security():
+    """
+    Collect:
+    - Firewall status + rule risks (implemented)
+    - (Placeholders) Defender status, SMBv1, RDP, Users, Password policy, Installed patches
+    """
+    security = {
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "firewall": scan_windows_firewall(),
+
+        # placeholders for future modules
+        "defender": {"status": "not_implemented"},
+        "smbv1": {"status": "not_implemented"},
+        "rdp": {"status": "not_implemented"},
+        "users": {"status": "not_implemented"},
+        "password_policy": {"status": "not_implemented"},
+        "installed_patches": {"status": "not_implemented"},
+    }
+    return security
+
+
+# -----------------------------
+# OPTIONAL: SAVE REPORT
+# -----------------------------
+def save_report_json(report: dict, filename: str):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+
+
+# -----------------------------
+# MAIN
+# -----------------------------
+def main():
+    os_info = collect_os_information()
+    security = collect_windows_security()
+
+    full_report = {
+        "os_information": os_info,
+        "windows_security": security,
+    }
+
+    # Print only firewall user-friendly output (as you asked)
+    print_firewall_results_user_friendly(security["firewall"])
+
+    # Optional: save report file
+    out_name = f"windows_security_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_UTC.json"
+    save_report_json(full_report, out_name)
+    print(f"📄 Saved JSON report: {out_name}")
+
+
+if __name__ == "__main__":
+    main()
