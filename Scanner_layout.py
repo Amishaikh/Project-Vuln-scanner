@@ -92,8 +92,7 @@ def display_welcome():
     print("="*60 + "\n")
 
 def display_preparing_system():
-    """
-    Inform the user that system preparation is in progress.
+    """    Inform the user that system preparation is in progress.
     This message hides technical dependency checks.
     """
     print("Preparing your system for the security scan...")
@@ -351,8 +350,6 @@ def _get_nmap_path():
 def install_nmap():
     """
     Auto-install Npcap then Nmap (best possible automation on Windows).
-    Note: Windows may still show a driver permission prompt for Npcap.
-    Returns True if Nmap is installed successfully, otherwise False.
     """
     try:
         print("\n[*] Setting up scanning tools...")
