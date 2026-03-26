@@ -16,7 +16,7 @@ import urllib.request
 import tempfile
 import shutil
 import time
-
+from short_script import get_firewall_scan_results
 
 def main():
     # 1) Ensure we're running inside an elevated console first
@@ -389,7 +389,39 @@ def run_vulnerability_scan():
     - Network scanning
     - Data aggregation
     """
-    pass
+    """
+    Run all team vulnerability modules and collect their results.
+    Each module should return a structured dictionary.
+    """
+    all_results = {
+        "scan_title": "Client Vulnerability Scan Report",
+        "modules": []
+    }
+
+    try:
+        firewall_results = get_firewall_scan_results()
+        all_results["modules"].append(firewall_results)
+    except Exception as e:
+        all_results["modules"].append({
+            "module_name": "Firewall Security Check",
+            "status": "Failed",
+            "findings": [{
+                "title": "Firewall scan could not be completed",
+                "severity": "High",
+                "message": f"The firewall scan module failed to run. Error: {str(e)}"
+            }]
+        })
+
+    # Later your teammates will add:
+    # from teammate2_script import get_scan_results as get_user_scan_results
+    # from teammate3_script import get_scan_results as get_registry_scan_results
+    # from teammate4_script import get_scan_results as get_network_scan_results
+    #
+    # all_results["modules"].append(get_user_scan_results())
+    # all_results["modules"].append(get_registry_scan_results())
+    # all_results["modules"].append(get_network_scan_results())
+
+    return all_results
 
 
 # -------- WINDOWS SECURITY CHECKS --------
@@ -447,7 +479,74 @@ def generate_report(scan_data):
     - Recommendations
     Output: HTML / TXT file
     """
-    pass
+    """
+    Generate a simple HTML report for non-technical users.
+    """
+    try:
+        html = []
+        html.append("""
+        <html>
+        <head>
+            <title>Vulnerability Scan Report</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 30px; background: #f7f9fc; color: #222; }
+                h1, h2 { color: #1f4e79; }
+                .card {
+                    background: white;
+                    border: 1px solid #ddd;
+                    border-radius: 10px;
+                    padding: 16px;
+                    margin-bottom: 20px;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+                }
+                .severity-High { color: #b00020; font-weight: bold; }
+                .severity-Medium { color: #d97706; font-weight: bold; }
+                .severity-Low { color: #2563eb; font-weight: bold; }
+                .severity-Info { color: #4b5563; font-weight: bold; }
+                ul { padding-left: 20px; }
+            </style>
+        </head>
+        <body>
+        """)
+
+        html.append(f"<h1>{scan_data.get('scan_title', 'Security Report')}</h1>")
+        html.append("<p>This report gives a simple overview of the security checks completed on this device.</p>")
+
+        for module in scan_data.get("modules", []):
+            html.append("<div class='card'>")
+            html.append(f"<h2>{module.get('module_name', 'Unknown Module')}</h2>")
+            html.append(f"<p><strong>Status:</strong> {module.get('status', 'Unknown')}</p>")
+
+            findings = module.get("findings", [])
+            if findings:
+                html.append("<ul>")
+                for item in findings:
+                    sev = item.get("severity", "Info")
+                    title = item.get("title", "Finding")
+                    msg = item.get("message", "")
+                    html.append(
+                        f"<li><span class='severity-{sev}'>{sev}</span> - "
+                        f"<strong>{title}</strong><br>{msg}</li><br>"
+                    )
+                html.append("</ul>")
+            else:
+                html.append("<p>No issues were reported in this section.</p>")
+
+            html.append("</div>")
+
+        html.append("</body></html>")
+
+        report_path = os.path.join(os.getcwd(), "vulnerability_report.html")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("".join(html))
+
+        print(f"[✓] Report generated: {report_path}")
+        return True
+
+    except Exception as e:
+        print(f"[!] Report generation failed: {e}")
+        return False
+    
 
 
 # ==========================================
