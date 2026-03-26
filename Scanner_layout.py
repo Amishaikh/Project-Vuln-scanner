@@ -17,6 +17,7 @@ import tempfile
 import shutil
 import time
 from short_script import get_firewall_scan_results
+from privilege_escalation import get_privilege_escalation_results 
 
 def main():
     # 1) Ensure we're running inside an elevated console first
@@ -412,16 +413,26 @@ def run_vulnerability_scan():
             }]
         })
 
-    # Later your teammates will add:
-    # from teammate2_script import get_scan_results as get_user_scan_results
-    # from teammate3_script import get_scan_results as get_registry_scan_results
-    # from teammate4_script import get_scan_results as get_network_scan_results
-    #
-    # all_results["modules"].append(get_user_scan_results())
-    # all_results["modules"].append(get_registry_scan_results())
-    # all_results["modules"].append(get_network_scan_results())
+    # Privilege escalation module
+    try:
+        privilege_results = get_privilege_escalation_results()
+        all_results["modules"].append(privilege_results)
+    except Exception as e:
+        all_results["modules"].append({
+            "module_name": "Privilege Escalation Check",
+            "status": "Failed",
+            "findings": [{
+                "title": "Privilege escalation scan could not be completed",
+                "severity": "High",
+                "message": f"The privilege escalation module failed to run. Error: {str(e)}"
+            }]
+        })
 
+    # Add your other 2 teammates later in the same way
+    # from script3 import get_scan_results as get_script3_results
+    
     return all_results
+
 
 
 # -------- WINDOWS SECURITY CHECKS --------
@@ -480,7 +491,7 @@ def generate_report(scan_data):
     Output: HTML / TXT file
     """
     """
-    Generate a simple HTML report for non-technical users.
+    Generate one non-technical HTML report for all modules.
     """
     try:
         html = []
@@ -489,8 +500,15 @@ def generate_report(scan_data):
         <head>
             <title>Vulnerability Scan Report</title>
             <style>
-                body { font-family: Arial, sans-serif; margin: 30px; background: #f7f9fc; color: #222; }
-                h1, h2 { color: #1f4e79; }
+                body {
+                    font-family: Arial, sans-serif;
+                    margin: 30px;
+                    background: #f7f9fc;
+                    color: #222;
+                }
+                h1, h2 {
+                    color: #1f4e79;
+                }
                 .card {
                     background: white;
                     border: 1px solid #ddd;
@@ -499,11 +517,25 @@ def generate_report(scan_data):
                     margin-bottom: 20px;
                     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
                 }
-                .severity-High { color: #b00020; font-weight: bold; }
-                .severity-Medium { color: #d97706; font-weight: bold; }
-                .severity-Low { color: #2563eb; font-weight: bold; }
-                .severity-Info { color: #4b5563; font-weight: bold; }
-                ul { padding-left: 20px; }
+                .severity-High {
+                    color: #b00020;
+                    font-weight: bold;
+                }
+                .severity-Medium {
+                    color: #d97706;
+                    font-weight: bold;
+                }
+                .severity-Low {
+                    color: #2563eb;
+                    font-weight: bold;
+                }
+                .severity-Info {
+                    color: #4b5563;
+                    font-weight: bold;
+                }
+                ul {
+                    padding-left: 20px;
+                }
             </style>
         </head>
         <body>
@@ -546,6 +578,7 @@ def generate_report(scan_data):
     except Exception as e:
         print(f"[!] Report generation failed: {e}")
         return False
+
     
 
 
